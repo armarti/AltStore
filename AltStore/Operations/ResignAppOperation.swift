@@ -9,6 +9,7 @@
 import Foundation
 import Roxas
 
+import AltStoreCore
 import AltSign
 
 @objc(ResignAppOperation)
@@ -109,18 +110,28 @@ private extension ResignAppOperation
         {
             guard let identifier = bundle.bundleIdentifier else { throw ALTError(.missingAppBundle) }
             guard let profile = profiles[identifier] else { throw ALTError(.missingProvisioningProfile) }
-            guard var infoDictionary = bundle.infoDictionary else { throw ALTError(.missingInfoPlist) }
+            guard var infoDictionary = bundle.completeInfoDictionary else { throw ALTError(.missingInfoPlist) }
             
             infoDictionary[kCFBundleIdentifierKey as String] = profile.bundleIdentifier
-            
+            infoDictionary[Bundle.Info.altBundleID] = identifier
+
             for (key, value) in additionalInfoDictionaryValues
             {
                 infoDictionary[key] = value
             }
-            
+
             if let appGroups = profile.entitlements[.appGroups] as? [String]
             {
                 infoDictionary[Bundle.Info.appGroups] = appGroups
+
+                // To keep file providers working, remap the NSExtensionFileProviderDocumentGroup, if there is one.
+                if var extensionInfo = infoDictionary["NSExtension"] as? [String: Any],
+                    let appGroup = extensionInfo["NSExtensionFileProviderDocumentGroup"] as? String,
+                    let localAppGroup = appGroups.filter({ $0.contains(appGroup) }).min(by: { $0.count < $1.count })
+                {
+                    extensionInfo["NSExtensionFileProviderDocumentGroup"] = localAppGroup
+                    infoDictionary["NSExtension"] = extensionInfo
+                }
             }
             
             // Add app-specific exported UTI so we can check later if this app (extension) is installed or not.
@@ -147,7 +158,7 @@ private extension ResignAppOperation
                 progress.becomeCurrent(withPendingUnitCount: 1)
                 
                 guard let appBundle = Bundle(url: appBundleURL) else { throw ALTError(.missingAppBundle) }
-                guard let infoDictionary = appBundle.infoDictionary else { throw ALTError(.missingInfoPlist) }
+                guard let infoDictionary = appBundle.completeInfoDictionary else { throw ALTError(.missingInfoPlist) }
                 
                 var allURLSchemes = infoDictionary[Bundle.Info.urlTypes] as? [[String: Any]] ?? []
                 
@@ -178,6 +189,22 @@ private extension ResignAppOperation
                     {
                         // The embedded certificate + certificate identifier are already in app bundle, no need to update them.
                     }
+                }
+                
+                let iconScale = Int(UIScreen.main.scale)
+                
+                if let alternateIconURL = self.context.alternateIconURL,
+                   case let data = try Data(contentsOf: alternateIconURL),
+                   let image = UIImage(data: data),
+                   let icon = image.resizing(toFill: CGSize(width: 60 * iconScale, height: 60 * iconScale)),
+                   let iconData = icon.pngData()
+                {
+                    let iconName = "AltIcon"
+                    let iconURL = appBundleURL.appendingPathComponent(iconName + "@\(iconScale)x.png")
+                    try iconData.write(to: iconURL, options: .atomic)
+                    
+                    let iconDictionary = ["CFBundlePrimaryIcon": ["CFBundleIconFiles": [iconName]]]
+                    additionalValues["CFBundleIcons"] = iconDictionary
                 }
                 
                 // Prepare app
