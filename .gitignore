@@ -27,4 +27,6 @@ xcuserdata
 *.xcscmblueprint
 
 ## Obj-C/Swift specific
-*.hmap
+*.hmap/.tmp
+/.tmp/
+/.tmp/*
